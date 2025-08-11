@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vessel Fouling Management System</title>
+    <link rel="stylesheet" href="css/main.css">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color" content="#2c3e50">
+</head>
+<body>
+    <div id="app">
+        <!-- Login Screen -->
+        <div id="login-screen" class="screen active">
+            <div class="login-container">
+                <div class="app-header">
+                    <h1>🚢 Vessel Fouling Management</h1>
+                    <p>Monitor hull fouling and optimize fuel efficiency</p>
+                </div>
+                
+                <div class="auth-forms">
+                    <!-- Login Form -->
+                    <form id="login-form" class="auth-form active">
+                        <h2>Sign In</h2>
+                        <div class="form-group">
+                            <label for="login-email">Email</label>
+                            <input type="email" id="login-email" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="login-password">Password</label>
+                            <input type="password" id="login-password" required>
+                        </div>
+                        <button type="submit" class="btn-primary">Sign In</button>
+                        <p class="auth-switch">
+                            Don't have an account? 
+                            <a href="#" id="show-signup">Sign up here</a>
+                        </p>
+                    </form>
+                    
+                    <!-- Signup Form -->
+                    <form id="signup-form" class="auth-form">
+                        <h2>Create Account</h2>
+                        <div class="form-group">
+                            <label for="signup-name">Full Name</label>
+                            <input type="text" id="signup-name" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="signup-email">Email</label>
+                            <input type="email" id="signup-email" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="signup-phone">Phone Number</label>
+                            <input type="tel" id="signup-phone" placeholder="+61400000000">
+                        </div>
+                        <div class="form-group">
+                            <label for="signup-password">Password</label>
+                            <input type="password" id="signup-password" required minlength="8">
+                        </div>
+                        <div class="form-group">
+                            <label for="notification-preference">Notification Preference</label>
+                            <select id="notification-preference">
+                                <option value="SMS">SMS</option>
+                                <option value="EMAIL">Email</option>
+                                <option value="WEB">Web Only</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn-primary">Create Account</button>
+                        <p class="auth-switch">
+                            Already have an account? 
+                            <a href="#" id="show-login">Sign in here</a>
+                        </p>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Dashboard Screen -->
+        <div id="dashboard-screen" class="screen">
+            <nav class="top-nav">
+                <div class="nav-brand">
+                    <h1>🚢 Fouling Management</h1>
+                </div>
+                <div class="nav-controls">
+                    <select id="vessel-selector" class="vessel-select">
+                        <option value="">Select Vessel...</option>
+                    </select>
+                    <button id="add-vessel-btn" class="btn-secondary">+ Add Vessel</button>
+                    <button id="logout-btn" class="btn-text">Logout</button>
+                </div>
+            </nav>
+            
+            <main class="dashboard-main">
+                <!-- No Vessel Selected -->
+                <div id="no-vessel-selected" class="no-vessel">
+                    <div class="empty-state">
+                        <h2>Welcome to Vessel Fouling Management</h2>
+                        <p>Select a vessel or add a new one to get started.</p>
+                        <button id="add-first-vessel-btn" class="btn-primary">Add Your First Vessel</button>
+                    </div>
+                </div>
+                
+                <!-- Dashboard Content -->
+                <div id="dashboard-content" class="dashboard-content">
+                    <!-- Current Status -->
+                    <div class="status-section">
+                        <div class="status-card current-status">
+                            <h3>Current Status</h3>
+                            <div class="status-display">
+                                <div class="fouling-gauge">
+                                    <canvas id="foulingGauge" width="200" height="100"></canvas>
+                                    <div class="gauge-labels">
+                                        <span class="fr-level">FR<span id="current-fr">0</span></span>
+                                        <span class="days-since">Day <span id="days-since-clean">0</span></span>
+                                    </div>
+                                </div>
+                                <div class="status-metrics">
+                                    <div class="metric">
+                                        <label>Next Clean</label>
+                                        <span id="next-clean-date">-</span>
+                                    </div>
+                                    <div class="metric">
+                                        <label>Confidence</label>
+                                        <span id="model-confidence">-</span>
+                                    </div>
+                                    <div class="metric">
+                                        <label>Next Check</label>
+                                        <span id="next-notification">-</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="status-card data-entry">
+                            <h3>Record Fuel Data</h3>
+                            <form id="fuel-entry-form">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="fuel-speed">Speed (knots)</label>
+                                        <input type="number" id="fuel-speed" name="speed" step="0.1" min="0" max="50" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="fuel-rate">Fuel Rate</label>
+                                        <input type="number" id="fuel-rate" name="fuel-rate" step="0.1" min="0" required>
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label for="fuel-unit">Unit</label>
+                                        <select id="fuel-unit" name="fuel-unit">
+                                            <option value="L/hr">L/hr</option>
+                                            <option value="$/hr">$/hr</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="weather-condition">Weather</label>
+                                        <select id="weather-condition" name="weather-condition">
+                                            <option value="calm">Calm</option>
+                                            <option value="moderate" selected>Moderate</option>
+                                            <option value="rough">Rough</option>
+                                            <option value="storm">Storm</option>
+                                            </select>
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn-primary">Record Data</button>
+                            </form>
+                        </div>
+                    </div>
+                    
+                    <!-- Charts Section -->
+                    <div class="charts-section">
+                        <div class="chart-card">
+                            <h3>Fuel Consumption Trend</h3>
+                            <canvas id="fuelTrendChart"></canvas>
+                        </div>
+                        
+                        <div class="chart-card">
+                            <h3>Cost Impact Analysis</h3>
+                            <canvas id="costImpactChart"></canvas>
+                        </div>
+                    </div>
+                    
+                    <!-- Recommendations -->
+                    <div class="recommendations-section">
+                        <div class="recommendation-card" id="cleaning-recommendation">
+                            <h3>Cleaning Recommendation</h3>
+                            <div id="recommendation-content">
+                                <div class="loading">Loading recommendations...</div>
+                            </div>
+                        </div>
+                        
+                        <div class="recommendation-card">
+                            <h3>Performance Metrics</h3>
+                            <div class="metrics-grid">
+                                <div class="metric-item">
+                                    <label>Extra Cost/Day</label>
+                                    <span id="extra-cost-day" class="metric-value">$0</span>
+                                </div>
+                                <div class="metric-item">
+                                    <label>CO₂ Impact</label>
+                                    <span id="co2-impact" class="metric-value">0 kg/day</span>
+                                </div>
+                                <div class="metric-item">
+                                    <label>Annual Savings</label>
+                                    <span id="annual-savings" class="metric-value">$0</span>
+                                </div>
+                                <div class="metric-item">
+                                    <label>ROI Period</label>
+                                    <span id="roi-period" class="metric-value">- days</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+        </div>
+        
+        <!-- Vessel Setup Modal -->
+        <div id="vessel-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="vessel-modal-title">Add New Vessel</h2>
+                    <button class="modal-close">&times;</button>
+                </div>
+                <form id="vessel-form">
+                    <div class="form-section">
+                        <h3>Basic Information</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-name">Vessel Name *</label>
+                                <input type="text" id="vessel-name" name="vessel-name" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-imo">IMO Number</label>
+                                <input type="text" id="vessel-imo" name="vessel-imo">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-type">Vessel Type</label>
+                                <select id="vessel-type" name="vessel-type">
+                                    <option value="custom">Custom</option>
+                                    <option value="cargo">Cargo</option>
+                                    <option value="container">Container</option>
+                                    <option value="tug">Tug</option>
+                                    <option value="cruise">Cruise</option>
+                                    <option value="workboat">Workboat</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-category">Category</label>
+                                <select id="vessel-category" name="vessel-category">
+                                    <option value="cargo">Cargo</option>
+                                    <option value="container">Container</option>
+                                    <option value="cruise">Cruise</option>
+                                    <option value="naval">Naval</option>
+                                    <option value="workboat">Workboat</option>
+                                    <option value="yacht">Yacht</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>Vessel Dimensions</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-length">Length (m) *</label>
+                                <input type="number" id="vessel-length" name="vessel-length" step="0.1" min="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-beam">Beam (m) *</label>
+                                <input type="number" id="vessel-beam" name="vessel-beam" step="0.1" min="0" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-draft">Draft (m) *</label>
+                                <input type="number" id="vessel-draft" name="vessel-draft" step="0.1" min="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-cb">Block Coefficient *</label>
+                                <input type="number" id="vessel-cb" name="vessel-cb" step="0.01" min="0.3" max="1" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-gt">Gross Tonnage</label>
+                                <input type="number" id="vessel-gt" name="vessel-gt" min="0">
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-displacement">Displacement (t)</label>
+                                <input type="number" id="vessel-displacement" name="vessel-displacement" min="0">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>Operating Profile</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-eco-speed">Economic Speed (kn) *</label>
+                                <input type="number" id="vessel-eco-speed" name="vessel-eco-speed" step="0.1" min="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-full-speed">Full Speed (kn) *</label>
+                                <input type="number" id="vessel-full-speed" name="vessel-full-speed" step="0.1" min="0" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-cost-eco">Fuel Cost @ Eco (L/hr) *</label>
+                                <input type="number" id="vessel-cost-eco" name="vessel-cost-eco" step="0.1" min="0" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-cost-full">Fuel Cost @ Full (L/hr) *</label>
+                                <input type="number" id="vessel-cost-full" name="vessel-cost-full" step="0.1" min="0" required>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-section">
+                        <h3>Maintenance Schedule</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="vessel-last-clean">Last Hull Clean *</label>
+                                <input type="date" id="vessel-last-clean" name="vessel-last-clean" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="vessel-next-clean">Next Scheduled Clean</label>
+                                <input type="date" id="vessel-next-clean" name="vessel-next-clean">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="modal-footer">
+                        <button type="button" class="btn-secondary modal-cancel">Cancel</button>
+                        <button type="submit" class="btn-primary">Save Vessel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Loading Overlay -->
+        <div id="loading-overlay" class="loading-overlay">
+            <div class="spinner"></div>
+            <p>Loading...</p>
+        </div>
+        
+        <!-- Toast Notifications -->
+        <div id="toast-container"></div>
+    </div>
+    
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="js/utils.js"></script>
+    <script src="js/auth.js"></script>
+    <script src="js/dashboard.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>

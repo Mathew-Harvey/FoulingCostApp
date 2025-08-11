@@ -1,0 +1,42 @@
+{
+  "name": "vessel-fouling-app",
+  "version": "1.0.0",
+  "description": "Vessel fouling and fuel prediction application",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "migrate": "node migrations/run.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "bcrypt": "^5.1.1",
+    "better-sqlite3": "^10.0.0",
+    "chart.js": "^4.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^2.7.0",
+    "sql.js": "^1.11.1",
+    "sqlite3": "^5.1.7",
+    "twilio": "^5.2.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "vessel",
+    "fouling",
+    "fuel",
+    "prediction",
+    "marine"
+  ],
+  "author": "",
+  "license": "MIT"
+}
