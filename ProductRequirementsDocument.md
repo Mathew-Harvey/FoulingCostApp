@@ -1,14 +1,75 @@
-Final Product Requirements Document
-Vessel Fouling & Fuel Prediction Application
+Final Product Requirements Document: Vessel Fouling & Fuel Prediction Application
 Project Overview
 A web application that tracks vessel fuel consumption and predicts fouling-related costs by combining physics-based models with machine learning from real-world data. The system reuses existing hull fouling calculator and BFMP generator code, adding data collection and adaptive learning capabilities.
 Technology Stack
 
 Backend: Node.js with minimal Express
 Frontend: Vanilla JavaScript, HTML, CSS (no frameworks)
-Database: SQLite (server and client-side)
-Existing Code: Hull fouling calculator (paste.txt) and BFMP generator (paste-2.txt)
+Database: SQLite (server and client-side via sql.js for offline)
+Existing Code: Hull fouling calculator (summarized below from paste.txt) and BFMP generator (summarized below from paste-2.txt)
 External Services: OpenWeatherMap API, Twilio SMS
+Additional Libraries:
+
+Backend: express@^4.18.2, sqlite3@^5.1.7, jsonwebtoken@^9.0.2, bcrypt@^5.1.1, twilio@^5.2.2, node-fetch@^2.7.0, node-cron@^3.0.3, better-sqlite3@^10.0.0 (for performance)
+Frontend: chart.js@^4.4.3 (for dashboards), sql.js@^1.11.1 (WASM SQLite for client-side offline)
+
+
+Package.json Snippet (for reproducibility):
+json{
+  "name": "vessel-fouling-app",
+  "version": "1.0.0",
+  "main": "server/index.js",
+  "dependencies": {
+    "express": "^4.18.2",
+    "sqlite3": "^5.1.7",
+    "jsonwebtoken": "^9.0.2",
+    "bcrypt": "^5.1.1",
+    "twilio": "^5.2.2",
+    "node-fetch": "^2.7.0",
+    "node-cron": "^3.0.3",
+    "better-sqlite3": "^10.0.0",
+    "chart.js": "^4.4.3",
+    "sql.js": "^1.11.1"
+  },
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
+
+
+Summary of Existing Code
+To ensure self-contained implementation, key functions from paste.txt (Hull Fouling Calculator) and paste-2.txt (BFMP Generator) are summarized here. These must be extracted into separate modules as indicated.
+From paste.txt (Hull Fouling Calculator)
+
+Class: FoulingPhysics
+
+Constructor: Takes vessel parameters (length, beam, draft, cb, gross_tonnage, etc.).
+solveAlphaBeta(ecoCost, fullCost, ecoSpeed, fullSpeed): Solves for alpha and beta coefficients using physics equations. Returns { alpha, beta }.
+
+Example: Assumes quadratic cost model: cost = alpha * speed^2 + beta.
+Edge Case: If speeds are equal, throw error "Speeds must differ".
+
+
+calculateCostAt(speed, frLevel): Calculates fuel cost at given speed and fouling rating (FR 0-5). Applies fouling multipliers (e.g., FR0: 1.0, FR1: 1.1, ..., FR5: 1.5).
+
+Formula: baseCost * (1 + frLevel * 0.1)
+Edge Case: Clamp speed between min/max vessel speeds.
+
+
+
+
+Other Functions: Include any wave resistance calcs using wave_exp.
+
+From paste-2.txt (BFMP Generator)
+
+generatePlanHtml(bfmpData): Takes a JSON object with vessel, revision, operatingProfile, maintenance, riskManagement sections and returns an HTML string formatted as a BFMP document.
+
+Example: Uses template literals to build  sections for each part.
+Edge Case: If data missing, use defaults like "N/A".
+
 
 
 1. Database Schema
@@ -31,32 +92,32 @@ CREATE TABLE vessels (
     imo TEXT,
     created_by INTEGER NOT NULL,
     vessel_type TEXT, -- 'tug', 'cruiseShip', 'custom'
-    
+   
     -- Core vessel parameters from calculator
     length REAL,
     beam REAL,
     draft REAL,
     cb REAL, -- block coefficient
     gross_tonnage REAL,
-    
+   
     -- Speed and cost parameters
     eco_speed REAL,
     full_speed REAL,
     cost_eco REAL,
     cost_full REAL,
-    
+   
     -- Additional parameters for custom vessels
     displacement REAL,
     wave_exp REAL DEFAULT 4.5,
     vessel_category TEXT, -- cargo, container, cruise, naval, workboat, yacht
-    
+   
     -- Maintenance dates
     last_clean_date DATE NOT NULL,
     next_clean_date DATE,
-    
+   
     -- BFMP data (JSON)
     bfmp_data TEXT,
-    
+   
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (created_by) REFERENCES users(id)
 );
@@ -78,7 +139,7 @@ CREATE TABLE fuel_readings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     vessel_id INTEGER NOT NULL,
     user_id INTEGER NOT NULL,
-    timestamp DATETIME NOT NULL,
+    timestamp DATETIME NOT NULL UNIQUE ON CONFLICT FAIL, -- Prevent duplicates
     fuel_rate REAL NOT NULL, -- L/hr or $/hr
     fuel_unit TEXT NOT NULL, -- 'L/hr' or '$/hr'
     currency TEXT DEFAULT 'AUD', -- AUD, USD, GBP
@@ -98,22 +159,30 @@ CREATE TABLE fouling_models (
     -- Physics model parameters
     base_alpha REAL,
     base_beta REAL,
-    
+   
     -- Learned corrections
     correction_factor REAL DEFAULT 1.0,
     fouling_accumulation_rate REAL DEFAULT 1.0,
-    
+   
     -- Current estimated state
     estimated_fr_level INTEGER DEFAULT 0, -- 0-5 scale
-    days_since_clean INTEGER,
-    
+    -- days_since_clean is calculated dynamically via VIEW below
+   
     -- Model confidence and training
     confidence_score REAL DEFAULT 0.0,
     training_data_count INTEGER DEFAULT 0,
     last_updated DATETIME,
-    
+   
     FOREIGN KEY (vessel_id) REFERENCES vessels(id)
 );
+
+-- View for dynamic days_since_clean
+CREATE VIEW vessel_fouling_state AS
+SELECT 
+    fm.*,
+    JULIANDAY(CURRENT_DATE) - JULIANDAY(v.last_clean_date) AS days_since_clean
+FROM fouling_models fm
+JOIN vessels v ON fm.vessel_id = v.id;
 
 -- Predictions and recommendations
 CREATE TABLE predictions (
@@ -126,6 +195,7 @@ CREATE TABLE predictions (
     confidence REAL,
     actual_fuel_rate REAL, -- filled when reading comes in
     error_percentage REAL, -- calculated after actual reading
+    weather_condition TEXT, -- Align with readings
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (vessel_id) REFERENCES vessels(id)
 );
@@ -143,205 +213,207 @@ CREATE TABLE notification_schedule (
     FOREIGN KEY (vessel_id) REFERENCES vessels(id)
 );
 
+-- Indexes for performance
+CREATE INDEX idx_fuel_readings_vessel_id ON fuel_readings(vessel_id);
+CREATE INDEX idx_predictions_vessel_id ON predictions(vessel_id);
+
+-- Trigger for normalizing fuel_rate to L/hr (assuming conversion factor; adjust as needed)
+CREATE TRIGGER normalize_fuel AFTER INSERT ON fuel_readings
+BEGIN
+    UPDATE fuel_readings SET fuel_rate = fuel_rate / 2.5 WHERE fuel_unit = '$/hr' AND id = NEW.id; -- Example conversion
+    UPDATE fuel_readings SET fuel_unit = 'L/hr' WHERE fuel_unit = '$/hr' AND id = NEW.id;
+END;
 2. File Structure
-vessel-fouling-app/
+textvessel-fouling-app/
 ├── server/
-│   ├── index.js                 # Express server setup
-│   ├── config.js                # Environment config
-│   ├── database.js              # SQLite connection and queries
-│   ├── auth.js                  # Simple JWT authentication
+│   ├── index.js # Express server setup with rate limiting and HTTPS enforcement
+│   ├── config.js # Environment config
+│   ├── database.js # SQLite connection (using better-sqlite3) and parameterized queries
+│   ├── auth.js # JWT authentication with refresh tokens
 │   │
 │   ├── models/
-│   │   ├── foulingPhysics.js    # Extract physics functions from calculator
-│   │   ├── adaptiveModel.js     # Learning layer on top of physics
-│   │   └── bfmpGenerator.js     # Existing BFMP generation logic
+│   │   ├── foulingPhysics.js # Extracted from paste.txt
+│   │   ├── adaptiveModel.js # Learning layer
+│   │   └── bfmpGenerator.js # Extracted from paste-2.txt
 │   │
 │   ├── routes/
-│   │   ├── auth.js              # Login, signup, password reset
-│   │   ├── vessels.js           # Vessel CRUD operations
-│   │   ├── readings.js          # Fuel data collection endpoints
-│   │   ├── predictions.js       # Get predictions and trends
-│   │   ├── bfmp.js             # BFMP generation and management
-│   │   └── notifications.js     # Notification preferences
+│   │   ├── auth.js # Login, signup, password reset
+│   │   ├── vessels.js # Vessel CRUD
+│   │   ├── readings.js # Fuel data endpoints
+│   │   ├── predictions.js # Predictions and trends
+│   │   ├── bfmp.js # BFMP management
+│   │   └── notifications.js # Notification prefs
 │   │
 │   └── services/
-│       ├── sms.js               # Twilio SMS integration
-│       ├── weather.js           # OpenWeatherMap integration
-│       ├── notifications.js     # Notification scheduler
-│       └── modelTraining.js     # Model update logic
+│       ├── sms.js # Twilio integration with parsing error handling
+│       ├── weather.js # OpenWeatherMap with fallback to 'moderate'
+│       ├── notifications.js # Scheduler using node-cron
+│       └── modelTraining.js # Model update logic with batch retraining
 │
 ├── public/
-│   ├── index.html               # Login/signup page
-│   ├── dashboard.html           # Main dashboard
-│   ├── vessel-setup.html        # Vessel configuration
-│   ├── calculator.html          # What-if calculator (existing)
-│   ├── bfmp-generator.html      # BFMP creation (existing)
+│   ├── index.html # Login/signup
+│   ├── dashboard.html # Dashboard
+│   ├── vessel-setup.html # Vessel config
+│   ├── calculator.html # What-if calculator
+│   ├── bfmp-generator.html # BFMP creation
 │   │
 │   ├── css/
-│   │   ├── main.css            # Core styles
-│   │   ├── calculator.css      # Existing calculator styles
-│   │   └── dashboard.css       # Dashboard specific styles
+│   │   ├── main.css # Core styles with media queries for mobile
+│   │   ├── calculator.css # Existing
+│   │   └── dashboard.css # Dashboard styles
 │   │
 │   ├── js/
-│   │   ├── app.js              # Main app logic
-│   │   ├── auth.js             # Authentication handling
-│   │   ├── calculator.js        # Existing calculator (modified)
-│   │   ├── bfmpGenerator.js    # Existing BFMP logic (modified)
-│   │   ├── dashboard.js        # Dashboard charts and UI
-│   │   ├── dataEntry.js        # Fuel reading input
-│   │   ├── offline.js          # Offline sync logic
-│   │   └── utils.js            # Shared utilities
+│   │   ├── app.js # Main logic
+│   │   ├── auth.js # Auth handling
+│   │   ├── calculator.js # Modified existing
+│   │   ├── bfmpGenerator.js # Modified existing
+│   │   ├── dashboard.js # Charts/UI with real-time updates via setInterval
+│   │   ├── dataEntry.js # Fuel input
+│   │   ├── offline.js # Offline sync
+│   │   └── utils.js # Utilities (e.g., date formatting)
 │   │
-│   └── service-worker.js       # PWA offline support
+│   └── service-worker.js # PWA support
 │
-└── migrations/
-    └── 001_initial.sql          # Database setup
-
+├── migrations/
+│   └── 001_initial.sql # Full schema above
+│
+└── package.json # As above
 3. Core Features Implementation
 3.1 User Authentication
-javascript// Simple JWT-based auth with email/phone
+javascript// server/routes/auth.js
+// Simple JWT-based auth with email/phone and refresh tokens
 // POST /api/auth/signup
-{
-  "email": "skipper@vessel.com",
-  "phone": "+61400000000",
-  "name": "John Skipper",
-  "password": "securepassword"
-}
+// Body: { "email": "skipper@vessel.com", "phone": "+61400000000", "name": "John Skipper", "password": "securepassword" }
+// Validation: Email/phone unique, password min 8 chars
+// Hash with bcrypt, store, return { token, refreshToken, user }
 
 // POST /api/auth/login
-{
-  "email": "skipper@vessel.com",
-  "password": "securepassword"
-}
-// Returns: { token: "jwt_token", user: {...} }
+// Body: { "email": "skipper@vessel.com", "password": "securepassword" }
+// Returns: { token: "jwt_token", refreshToken: "refresh_token", user: {...} }
+// Edge Case: Invalid creds -> 401 { error: "Invalid credentials" }
+
+// POST /api/auth/refresh
+// Body: { refreshToken }
+// Returns new token if valid
+
+// All other endpoints require Authorization: Bearer <token>
 3.2 Vessel Setup
 javascript// POST /api/vessels
+// Body example:
 {
   "name": "MV Cargo Ship",
   "imo": "9876543",
-  "vessel_type": "custom", // or "tug", "cruiseShip"
-  
-  // Vessel parameters from existing calculator
+  "vessel_type": "custom",
   "length": 93,
   "beam": 16,
   "draft": 5.2,
   "cb": 0.62,
   "gross_tonnage": 5000,
-  
   "eco_speed": 10,
   "full_speed": 13.8,
-  "cost_eco": 1600,  // AUD/hr
-  "cost_full": 4200, // AUD/hr
-  
+  "cost_eco": 1600,
+  "cost_full": 4200,
   "vessel_category": "cargo",
   "last_clean_date": "2024-10-01",
   "next_clean_date": "2025-04-01"
 }
+// Validation: last_clean_date < next_clean_date, speeds differ
+// Edge Case: Invalid dates -> 400 { error: "Invalid dates" }
 3.3 Data Collection Flow
 Web Interface
 javascript// GET /api/readings/prompt
-// Returns current vessel state and prompts for input
-{
-  "vessel_id": 1,
-  "vessel_name": "MV Cargo Ship",
-  "last_reading": "2024-12-01T06:00:00Z",
-  "suggested_weather": "moderate", // from API if available
-  "current_location": {...}
-}
+// Returns: { vessel_id: 1, vessel_name: "MV Cargo Ship", last_reading: "2024-12-01T06:00:00Z", suggested_weather: "moderate", current_location: {lat, long} }
+// suggested_weather from OpenWeatherMap if lat/long provided, fallback 'moderate'
 
 // POST /api/readings
-{
-  "vessel_id": 1,
-  "fuel_rate": 450,
-  "fuel_unit": "L/hr",
-  "speed": 12.5,
-  "weather_condition": "moderate"
-}
+// Body: { vessel_id: 1, fuel_rate: 450, fuel_unit: "L/hr", speed: 12.5, weather_condition: "moderate" }
+// Edge Case: Offline -> queue in local DB
 SMS Interface
-javascript// Incoming SMS format: "FUEL 450 SPEED 12.5 WEATHER 2"
-// Weather codes: 0=calm, 1=moderate, 2=rough, 3=storm
-
-// Response SMS: "Recorded: 450L/hr at 12.5kn. Next check in 6hrs. 
-// Fouling: FR2 (35% increase). Consider cleaning in 45 days."
+javascript// Incoming SMS: "FUEL 450 SPEED 12.5 WEATHER 2"
+// Parse with regex; if fail, reply "Invalid format. Try: FUEL [rate] SPEED [knots] WEATHER [0-3]"
+// Weather: 0=calm, 1=moderate, 2=rough, 3=storm
+// Response: "Recorded: 450L/hr at 12.5kn. Next check in 6hrs. Fouling: FR2 (35% increase). Consider cleaning in 45 days."
+// Edge Case: Unknown vessel -> "No vessel associated. Reply with VESSEL [name]"
 3.4 Adaptive Model Implementation
 javascript// server/models/adaptiveModel.js
 class AdaptiveFoulingModel {
     constructor(vessel) {
-        // Import physics functions from existing calculator
         this.physics = new FoulingPhysics(vessel);
-        
-        // Initialize with physics-based predictions
-        const { alpha, beta } = this.physics.solveAlphaBeta(
-            vessel.cost_eco,
-            vessel.cost_full,
-            vessel.eco_speed,
-            vessel.full_speed
-        );
-        
+        const { alpha, beta } = this.physics.solveAlphaBeta(vessel.cost_eco, vessel.cost_full, vessel.eco_speed, vessel.full_speed);
         this.baseAlpha = alpha;
         this.baseBeta = beta;
         this.correctionFactor = 1.0;
         this.foulingRate = 1.0;
-        
-        // Track days since clean
         this.daysSinceClean = this.calculateDaysSinceClean(vessel.last_clean_date);
+        this.trainingData = []; // Array for batch retraining
+        this.confidence = 0.0;
     }
-    
+
+    calculateDaysSinceClean(lastCleanDate) {
+        const now = new Date();
+        const clean = new Date(lastCleanDate);
+        return Math.floor((now - clean) / (1000 * 60 * 60 * 24));
+    }
+
     estimateFRLevel(daysSinceClean) {
-        // Simple time-based estimation, adjusted by learned fouling rate
         const adjustedDays = daysSinceClean * this.foulingRate;
-        
-        if (adjustedDays < 30) return 0;  // FR0
-        if (adjustedDays < 60) return 1;  // FR1
-        if (adjustedDays < 120) return 2; // FR2
-        if (adjustedDays < 180) return 3; // FR3
-        if (adjustedDays < 270) return 4; // FR4
-        return 5; // FR5
+        if (adjustedDays < 30) return 0;
+        if (adjustedDays < 60) return 1;
+        if (adjustedDays < 120) return 2;
+        if (adjustedDays < 180) return 3;
+        if (adjustedDays < 270) return 4;
+        return 5;
     }
-    
+
     predict(speed, weather = 'calm') {
-        // Use existing physics model
         const frLevel = this.estimateFRLevel(this.daysSinceClean);
         const baseCost = this.physics.calculateCostAt(speed, frLevel);
-        
-        // Apply learned corrections
-        const weatherMultiplier = {
-            'calm': 1.0,
-            'moderate': 1.05,
-            'rough': 1.15,
-            'storm': 1.30
-        }[weather];
-        
+        const weatherMultiplier = { calm: 1.0, moderate: 1.05, rough: 1.15, storm: 1.30 }[weather];
         return baseCost * this.correctionFactor * weatherMultiplier;
     }
-    
+
     updateFromReading(actualFuelRate, speed, weather) {
+        if (actualFuelRate === 0) return; // Edge: Avoid div by zero
         const predicted = this.predict(speed, weather);
         const error = (actualFuelRate - predicted) / predicted;
-        
-        // Simple exponential smoothing for correction factor
         const learningRate = 0.1;
-        this.correctionFactor = this.correctionFactor * (1 - learningRate) + 
-                                (actualFuelRate / predicted) * learningRate;
-        
-        // Update confidence based on prediction accuracy
+        this.correctionFactor = Math.max(0.5, Math.min(2.0, this.correctionFactor * (1 - learningRate) + (actualFuelRate / predicted) * learningRate)); // Cap
         this.updateConfidence(Math.abs(error));
-        
-        // Store for batch retraining
         this.storeTrainingData(actualFuelRate, speed, weather, predicted);
-        
-        // Retrain if enough new data
-        if (this.shouldRetrain()) {
-            this.retrainModel();
-        }
+        if (this.shouldRetrain()) this.retrainModel();
     }
-    
+
+    updateConfidence(error) {
+        this.confidence = Math.max(0, Math.min(100, this.confidence + (0.05 - error) * 10)); // Simple adjustment
+    }
+
+    storeTrainingData(actual, speed, weather, predicted) {
+        this.trainingData.push({ actual, speed, weather, predicted });
+        if (this.trainingData.length > 100) this.trainingData.shift(); // Keep last 100
+    }
+
+    shouldRetrain() {
+        return this.trainingData.length % 10 === 0; // Every 10 new readings
+    }
+
+    retrainModel() {
+        // Simple linear regression on errors to update foulingRate
+        // Use least-squares: Assume foulingRate = sum((actual/predicted) / days) / n
+        let sum = 0;
+        this.trainingData.forEach(d => sum += (d.actual / d.predicted) / this.daysSinceClean);
+        this.foulingRate = sum / this.trainingData.length || 1.0;
+    }
+
+    calculateExtraCostPerDay() {
+        const base = this.predict(this.physics.vessel.eco_speed, 'calm') / this.correctionFactor; // Clean state
+        const current = this.predict(this.physics.vessel.eco_speed, 'calm');
+        return (current - base) * 24; // Per day
+    }
+
     recommendCleaning() {
-        // Calculate ROI for cleaning
         const currentExtraCost = this.calculateExtraCostPerDay();
-        const cleaningCost = 15000; // Example cost
+        const cleaningCost = 15000;
         const daysToBreakeven = cleaningCost / currentExtraCost;
-        
         return {
             recommended: daysToBreakeven < 60,
             daysToBreakeven,
@@ -356,77 +428,51 @@ class FoulingDashboard {
     constructor(vesselId) {
         this.vesselId = vesselId;
         this.charts = {};
-        
-        // Reuse chart config from existing calculator
         this.initializeCharts();
         this.loadData();
         this.startAutoRefresh();
     }
-    
-    async initializeCharts() {
-        // 1. Fuel consumption trend (predicted vs actual)
+
+    initializeCharts() {
+        // Fuel trend chart using Chart.js
         this.charts.fuelTrend = new Chart(document.getElementById('fuelTrendChart'), {
             type: 'line',
-            data: {
-                datasets: [
-                    {
-                        label: 'Physics Model',
-                        borderColor: 'rgba(30, 77, 120, 1)',
-                        backgroundColor: 'rgba(30, 77, 120, 0.1)',
-                    },
-                    {
-                        label: 'Adaptive Model',
-                        borderColor: 'rgba(147, 51, 234, 1)',
-                        borderDash: [5, 5]
-                    },
-                    {
-                        label: 'Actual Readings',
-                        borderColor: 'rgba(34, 197, 94, 1)',
-                        backgroundColor: 'rgba(34, 197, 94, 0.2)',
-                        showLine: false,
-                        pointRadius: 5
-                    }
-                ]
-            },
-            options: {
-                // Reuse options from existing calculator
-            }
+            data: { datasets: [ /* as in original */ ] },
+            options: { scales: { y: { beginAtZero: true } }, responsive: true }
         });
-        
-        // 2. Fouling accumulation indicator
-        this.charts.foulingGauge = this.createFoulingGauge();
-        
-        // 3. Cost impact chart
-        this.charts.costImpact = this.createCostImpactChart();
-        
-        // 4. CO2 emissions tracker
-        this.charts.emissions = this.createEmissionsChart();
+
+        // Fouling gauge: Pure CSS or Canvas
+        this.createFoulingGauge = () => {
+            const canvas = document.getElementById('foulingGauge');
+            const ctx = canvas.getContext('2d');
+            // Draw semi-circle gauge
+            // Colors: green (0-1), yellow (2-3), red (4-5)
+            // Example: ctx.arc(...) with fill based on level
+        };
+
+        // Similar for costImpact and emissions charts
     }
-    
-    createFoulingGauge() {
-        // Visual FR level indicator (0-5 scale)
-        const canvas = document.getElementById('foulingGauge');
-        // Create semi-circular gauge showing current FR level
-        // Color coded: green (FR0-1), yellow (FR2-3), red (FR4-5)
-    }
-    
+
     async loadData() {
-        // Fetch predictions and actual readings
-        const response = await fetch(`/api/predictions/${this.vesselId}`);
-        const data = await response.json();
-        
-        this.updateCharts(data);
-        this.updateMetrics(data);
-        this.updateRecommendations(data);
+        try {
+            const response = await fetch(`/api/predictions/${this.vesselId}`, { headers: { Authorization: `Bearer ${localStorage.token}` } });
+            if (!response.ok) throw new Error('Fetch failed');
+            const data = await response.json();
+            this.updateCharts(data);
+            this.updateMetrics(data);
+            this.updateRecommendations(data);
+        } catch (e) {
+            console.error(e); // Handle offline or errors
+        }
     }
-    
+
+    startAutoRefresh() {
+        setInterval(() => this.loadData(), 60000); // Every minute
+    }
+
     updateMetrics(data) {
-        // Display key metrics
-        document.getElementById('currentFR').textContent = `FR${data.currentFRLevel}`;
-        document.getElementById('daysSinceClean').textContent = data.daysSinceClean;
-        document.getElementById('extraCostPerDay').textContent = `$${data.extraCostPerDay}`;
-        document.getElementById('modelConfidence').textContent = `${data.confidence}%`;
-        document.getElementById('nextReading').textContent = this.formatTimeUntil(data.nextReading);
+        // As in original
+        // Edge: If data.null, show "N/A"
     }
 }
 3.6 Offline Support
@@ -436,57 +482,35 @@ class OfflineSync {
         this.db = this.initLocalDB();
         this.syncQueue = [];
     }
-    
+
     initLocalDB() {
-        // Initialize local SQLite
         const db = new SQL.Database();
-        
-        // Create local tables
-        db.run(`
-            CREATE TABLE IF NOT EXISTS offline_readings (
-                id INTEGER PRIMARY KEY,
-                vessel_id INTEGER,
-                fuel_rate REAL,
-                speed REAL,
-                weather TEXT,
-                timestamp TEXT,
-                synced INTEGER DEFAULT 0
-            )
-        `);
-        
+        db.run(`CREATE TABLE IF NOT EXISTS offline_readings (
+            id INTEGER PRIMARY KEY,
+            vessel_id INTEGER,
+            fuel_rate REAL,
+            speed REAL,
+            weather TEXT,
+            timestamp TEXT,
+            synced INTEGER DEFAULT 0
+        )`);
         return db;
     }
-    
+
     saveReading(data) {
-        // Save to local DB
-        this.db.run(
-            `INSERT INTO offline_readings 
-            (vessel_id, fuel_rate, speed, weather, timestamp) 
-            VALUES (?, ?, ?, ?, ?)`,
-            [data.vessel_id, data.fuel_rate, data.speed, 
-             data.weather, new Date().toISOString()]
-        );
-        
-        // Try to sync
+        this.db.run(`INSERT INTO offline_readings (vessel_id, fuel_rate, speed, weather, timestamp) VALUES (?, ?, ?, ?, ?)`,
+            [data.vessel_id, data.fuel_rate, data.speed, data.weather, new Date().toISOString()]);
         this.attemptSync();
     }
-    
+
     async attemptSync() {
         if (!navigator.onLine) return;
-        
-        // Get unsynced readings
-        const unsynced = this.db.exec(
-            "SELECT * FROM offline_readings WHERE synced = 0"
-        );
-        
-        for (const reading of unsynced[0]?.values || []) {
+        const unsynced = this.db.exec("SELECT * FROM offline_readings WHERE synced = 0")[0]?.values || [];
+        for (const reading of unsynced) {
             try {
                 await fetch('/api/readings', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
-                    },
+                    headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${localStorage.token}` },
                     body: JSON.stringify({
                         vessel_id: reading[1],
                         fuel_rate: reading[2],
@@ -495,275 +519,213 @@ class OfflineSync {
                         timestamp: reading[5]
                     })
                 });
-                
-                // Mark as synced
-                this.db.run(
-                    "UPDATE offline_readings SET synced = 1 WHERE id = ?",
-                    [reading[0]]
-                );
+                this.db.run("UPDATE offline_readings SET synced = 1 WHERE id = ?", [reading[0]]);
             } catch (error) {
-                console.error('Sync failed for reading:', reading[0]);
+                console.error('Sync failed:', error);
             }
         }
+        // Handle conflicts: If server timestamp newer, discard local
     }
 }
 
-// Service worker for PWA
-// public/service-worker.js
-self.addEventListener('install', event => {
-    event.waitUntil(
-        caches.open('v1').then(cache => {
-            return cache.addAll([
-                '/',
-                '/dashboard.html',
-                '/css/main.css',
-                '/js/app.js',
-                '/js/offline.js'
-            ]);
-        })
-    );
-});
+// service-worker.js as in original, add event listeners for fetch caching
 3.7 BFMP Integration
 javascript// server/routes/bfmp.js
+const router = require('express').Router();
+
 router.post('/vessels/:id/bfmp/generate', async (req, res) => {
     const vessel = await db.getVessel(req.params.id);
     const readings = await db.getRecentReadings(req.params.id, 30);
     
-    // Calculate operating profile from actual data
+    // Calculate profile
     const operatingProfile = {
-        speed: calculateAverageSpeed(readings),
+        speed: readings.reduce((sum, r) => sum + r.speed, 0) / readings.length || vessel.eco_speed,
         inServicePeriod: calculateDaysSinceClean(vessel.last_clean_date),
         tradingRoutes: 'Auto-generated from vessel data',
-        operatingArea: vessel.operating_area || 'Not specified',
-        climateZones: 'Temperate/Tropical', // Could derive from locations
-        afsSuitability: 'Yes' // Based on fouling rate
+        operatingArea: readings[0]?.latitude ? await reverseGeocode(readings[0].latitude, readings[0].longitude) : 'Not specified', // Use API if needed
+        climateZones: 'Temperate/Tropical',
+        afsSuitability: 'Yes'
     };
     
-    // Generate maintenance schedule based on model predictions
     const model = new AdaptiveFoulingModel(vessel);
-    const cleaningRecommendation = model.recommendCleaning();
+    const rec = model.recommendCleaning();
     
-    const bfmpData = {
-        vessel: {
-            name: vessel.name,
-            imo: vessel.imo,
-            constructionDate: vessel.created_at,
-            type: vessel.vessel_category,
-            grossTonnage: vessel.gross_tonnage,
-            beam: vessel.beam,
-            length: vessel.length,
-            maxDraft: vessel.draft,
-            minDraft: vessel.draft * 0.7,
-            flag: 'Australia'
-        },
-        revision: {
-            lastDrydock: vessel.last_clean_date,
-            nextDrydock: vessel.next_clean_date,
-            number: '1',
-            date: new Date().toISOString(),
-            responsiblePerson: req.user.name,
-            responsiblePosition: 'Vessel Operator'
-        },
-        operatingProfile,
-        maintenance: {
-            inspectionSchedule: `Monthly visual inspections. 
-                Increased to weekly when FR level exceeds ${cleaningRecommendation.currentFRLevel}.`,
-            cleaningSchedule: `Recommended cleaning in ${cleaningRecommendation.daysToBreakeven} days 
-                based on current fouling accumulation rate.`
-        },
-        riskManagement: {
-            parameters: 'Speed reduction, extended port stays, seasonal variations',
-            deviationLimits: 'Speed < 6 knots for > 7 days, Port stay > 14 days',
-            contingencyActions: 'Increase inspection frequency, consider spot cleaning',
-            longTermActions: 'Review coating performance, adjust cleaning schedule'
-        }
-    };
+    const bfmpData = { /* as in original */ };
     
-    // Use existing generatePlanHtml function
-    const planHtml = generatePlanHtml(bfmpData);
+    const planHtml = generatePlanHtml(bfmpData); // From existing
     
-    // Save to vessel record
-    await db.updateVessel(req.params.id, {
-        bfmp_data: JSON.stringify(bfmpData)
-    });
+    await db.updateVessel(req.params.id, { bfmp_data: JSON.stringify(bfmpData) });
     
-    res.json({ 
-        success: true, 
-        html: planHtml,
-        data: bfmpData 
-    });
+    res.json({ success: true, html: planHtml, data: bfmpData });
 });
 
+// Edge Case: No readings -> use defaults
 4. API Endpoints
+All endpoints (except auth/signup/login) require JWT. Error format: { error: "message", code: XXX }
+
 Authentication
 
-POST /api/auth/signup - Create account
-POST /api/auth/login - Login
-POST /api/auth/logout - Logout
+POST /api/auth/signup - Create account. Response: { token, refreshToken, user }
+POST /api/auth/login - Login. Response: { token, refreshToken, user }
+POST /api/auth/logout - Logout (invalidate refresh)
 POST /api/auth/reset-password - Reset password
+POST /api/auth/refresh - Refresh token
+
 
 Vessels
 
-GET /api/vessels - List user's vessels
-POST /api/vessels - Create vessel
-GET /api/vessels/:id - Get vessel details
-PUT /api/vessels/:id - Update vessel
-DELETE /api/vessels/:id - Delete vessel
-POST /api/vessels/:id/invite - Invite user to vessel
+GET /api/vessels - List vessels. Response: [{ id, name, ... }]
+POST /api/vessels - Create. Response: { id, ... }
+GET /api/vessels/:id - Details incl. fouling state. Response: { vessel: {...}, model: {...} }
+PUT /api/vessels/:id - Update
+DELETE /api/vessels/:id - Delete
+POST /api/vessels/:id/invite - Invite user
+
 
 Data Collection
 
-GET /api/readings/prompt - Get data entry prompt
-POST /api/readings - Submit fuel reading
-GET /api/vessels/:id/readings - Get vessel readings
-POST /api/readings/sms - SMS webhook for data entry
+GET /api/readings/prompt - Prompt. Response: { ... as above }
+POST /api/readings - Submit. Response: { success: true }
+GET /api/vessels/:id/readings - Readings. Response: [{ ... }]
+POST /api/readings/sms - SMS webhook
+
 
 Predictions & Analytics
 
-GET /api/vessels/:id/predictions - Get predictions
-GET /api/vessels/:id/trends - Get trend data
-GET /api/vessels/:id/recommendations - Get cleaning recommendations
-GET /api/vessels/:id/emissions - Get CO2 emissions data
+GET /api/vessels/:id/predictions - Predictions. Response: [{ ... }]
+GET /api/vessels/:id/trends - Trends. Response: { data: [...] }
+GET /api/vessels/:id/recommendations - Recs. Response: { recommended: bool, ... }
+GET /api/vessels/:id/emissions - Emissions (calc from fuel * factor). Response: { daily: X }
+
 
 BFMP
 
-POST /api/vessels/:id/bfmp/generate - Generate BFMP
-GET /api/vessels/:id/bfmp - Get existing BFMP
-PUT /api/vessels/:id/bfmp - Update BFMP
+POST /api/vessels/:id/bfmp/generate - Generate. Response: { html, data }
+GET /api/vessels/:id/bfmp - Get. Response: { data }
+PUT /api/vessels/:id/bfmp - Update
+
 
 Notifications
 
-GET /api/notifications/preferences - Get preferences
-PUT /api/notifications/preferences - Update preferences
-POST /api/notifications/test - Send test notification
+GET /api/notifications/preferences - Get
+PUT /api/notifications/preferences - Update
+POST /api/notifications/test - Test send
+
 
 
 5. User Interface Screens
 5.1 Login/Signup
 
-Email/phone and password
-"Remember me" option
-Password reset link
+Form: Email/phone, password, "Remember me" (localStorage token)
+Reset link opens modal
+Navigation: Top bar with logo, links to Dashboard/Vessels/Calculator/BFMP (post-login)
 
 5.2 Dashboard (Main Screen)
-┌─────────────────────────────────────┐
-│ Vessel: MV Cargo Ship    [Switch ▼] │
+text┌─────────────────────────────────────┐
+│ Vessel: MV Cargo Ship [Switch ▼] │
 ├─────────────────────────────────────┤
-│ Current Status                      │
-│ ┌──────────┐  Days Since: 45        │
-│ │   FR2    │  Next Clean: 135 days  │
-│ │  Gauge   │  Confidence: 87%       │
-│ └──────────┘  Next Check: 4:23      │
+│ Current Status │
+│ ┌──────────┐ Days Since: 45 │
+│ │ FR2 │ Next Clean: 135 days │
+│ │ Gauge │ Confidence: 87% │
+│ └──────────┘ Next Check: 4:23 │
 ├─────────────────────────────────────┤
-│ [Enter Fuel Reading]                │
+│ [Enter Fuel Reading] │
 ├─────────────────────────────────────┤
-│ Fuel Trend (Predicted vs Actual)    │
-│ [────────── Chart ──────────]       │
+│ Fuel Trend (Predicted vs Actual) │
+│ [────────── Chart ──────────] │
 ├─────────────────────────────────────┤
-│ Cost Impact    │ CO2 Emissions      │
-│ +$420/day      │ +165 kg/day        │
+│ Cost Impact │ CO2 Emissions │
+│ +$420/day │ +165 kg/day │
 ├─────────────────────────────────────┤
-│ Cleaning ROI Calculator              │
-│ Break-even: 36 days                 │
-│ Annual Savings: $45,000             │
-│ [Schedule Cleaning]                 │
+│ Cleaning ROI Calculator │
+│ Break-even: 36 days │
+│ Annual Savings: $45,000 │
+│ [Schedule Cleaning] │
 └─────────────────────────────────────┘
+
+HTML: Use <canvas>...</canvas>
+Mobile: Stack vertically via @media (max-width: 768px)
+
 5.3 Data Entry Screen
-┌─────────────────────────────────────┐
-│ Enter Fuel Reading                  │
+text┌─────────────────────────────────────┐
+│ Enter Fuel Reading │
 ├─────────────────────────────────────┤
-│ Current Speed: [___12.5___] knots   │
-│                                     │
-│ Fuel Rate: [____450____] ○ L/hr     │
-│                          ● $/hr     │
-│                                     │
-│ Weather:   ○ Calm                   │
-│           ● Moderate                │
-│           ○ Rough                   │
-│           ○ Storm                   │
-│                                     │
-│ [Submit]        [Skip This Check]   │
+│ Current Speed: [___12.5___] knots │
+│ │
+│ Fuel Rate: [____450____] ○ L/hr │
+│ ● $/hr │
+│ │
+│ Weather: ○ Calm │
+│ ● Moderate │
+│ ○ Rough │
+│ ○ Storm │
+│ │
+│ [Submit] [Skip This Check] │
 └─────────────────────────────────────┘
+
+Form with IDs for elements, submit via fetch
+
 5.4 Vessel Setup
 
-Reuse existing calculator interface for vessel parameters
-Add fields for last/next cleaning dates
-Option to upload or generate BFMP
+Reuse calculator interface
+Add date pickers for clean dates
+Button: "Generate BFMP" calls API
 
 5.5 What-If Calculator
 
-Keep existing calculator as standalone tool
-Add "Apply to Vessel" button to save scenarios
-
+Existing, add "Apply to Vessel" to POST /api/vessels
 
 6. Notification Flow
-SMS Format
-Outgoing: "Fuel check for MV Cargo Ship. Reply with: 
-FUEL [rate] SPEED [knots] WEATHER [0-3]
-Example: FUEL 450 SPEED 12.5 WEATHER 1"
 
-Incoming: "FUEL 450 SPEED 12.5 WEATHER 1"
-
-Response: "✓ Recorded. FR2 (35% increase). 
-Next check: 18:00. Consider cleaning in 45 days."
-Push Notification
-Title: "Fuel Check - MV Cargo Ship"
-Body: "Time to record fuel consumption"
-Action: Opens data entry screen
+Scheduler: In services/notifications.js, use cron.every(user.interval hours) to check/send
+SMS Out: "Fuel check for [vessel]. Reply: FUEL [rate] SPEED [knots] WEATHER [0-3]"
+Incoming Parse: Regex, handle errors by resend
+No Reply: After 1hr, missed_count++, resend up to 3 times
+Push: If WEB, use Notification API
 
 7. Implementation Priority
+
 Phase 1: Core MVP (Weeks 1-4)
 
-Week 1: Database setup, basic auth, vessel CRUD
-Week 2: Extract physics functions, create adaptive model
-Week 3: Data collection endpoints, SMS integration
-Week 4: Basic dashboard with charts
+Week 1: DB, auth, vessel CRUD (dep: none)
+Week 2: Physics extract, adaptive model (dep: Week 1)
+Week 3: Data endpoints, SMS (dep: Week 2)
+Week 4: Dashboard basics (dep: Week 3)
+
 
 Phase 2: Enhancement (Weeks 5-8)
 
-Week 5: Offline support, PWA setup
-Week 6: BFMP generation with live data
-Week 7: Advanced predictions, cleaning recommendations
-Week 8: Weather API, location tracking
+Week 5: Offline, PWA (dep: Phase 1)
+Week 6: BFMP with data (dep: Week 5)
+Week 7: Predictions, recs (dep: Week 6)
+Week 8: Weather, location (dep: Week 7)
+
 
 Phase 3: Polish (Weeks 9-10)
 
-Week 9: UI improvements, mobile optimization
-Week 10: Testing, deployment, monitoring
+Week 9: UI mobile, CSRF protection
+Week 10: Testing, deploy
+
 
 
 8. Success Metrics
-User Engagement
 
-80% of scheduled readings completed
-Average 5+ readings per week per vessel
-90% user retention after 30 days
-
-Model Performance
-
-Prediction accuracy within 15% after 30 days
-Successful cleaning recommendation (user confirms savings)
-Model confidence > 80% after 100 readings
-
-Technical
-
-95% uptime
-< 2 second page load
-100% offline data successfully synced
-
+Engagement: 80% readings completed (track via logs), 5+/week/vessel, 90% retention
+Model: Accuracy <15% after 30 days (compare predictions vs actual), confidence >80% after 100
+Technical: 95% uptime (monitor), <2s load, 100% sync
+Tracking: Use console.log or simple analytics endpoint
 
 9. Security Considerations
 
-Passwords hashed with bcrypt
-JWT tokens expire after 7 days
-Rate limiting on API endpoints
-Input validation on all forms
-SQL injection prevention with parameterized queries
-HTTPS only in production
-
+Hash: bcrypt
+JWT: Expire 7d, refresh 30d
+Rate Limit: 100 req/min via express-rate-limit
+Validation: All inputs sanitized, parameterized SQL
+CSRF: Tokens for forms
+HTTPS: Enforce in prod
 
 10. Configuration
-Environment Variables
 bash# .env
 NODE_ENV=production
 PORT=3000
@@ -773,22 +735,55 @@ TWILIO_ACCOUNT_SID=xxx
 TWILIO_AUTH_TOKEN=xxx
 TWILIO_PHONE_NUMBER=+61xxxxxxxxx
 OPENWEATHER_API_KEY=xxx
-
 11. Testing Requirements
 
-Unit tests for physics model functions
-Integration tests for API endpoints
-Model accuracy tests with synthetic data
-Offline sync testing
-SMS integration testing
-Load testing for 100+ concurrent users
-
+Unit: Jest for physics (e.g., test solveAlphaBeta with inputs: ecoCost=100, full=200, speeds=10/20, expect alpha=0.5, beta=0)
+Integration: API with supertest (e.g., POST /readings succeeds)
+Model: Synthetic data (e.g., 10 readings, check correctionFactor updates)
+Offline: Mock navigator.onLine=false, save, then true, sync
+SMS: Mock Twilio, test parse failures
+Load: 100 users with artillery
 
 12. Deployment
 
-Node.js hosting (AWS EC2, DigitalOcean, or Railway)
-SQLite database with daily backups
-SSL certificate
-Domain name
-SMS credits for Twilio
-Weather API subscription
+Primary Option: Home Lab with Cloudflare Tunnel
+
+Setup Steps:
+
+Install Node.js (>=20) and dependencies on your home lab server (e.g., Raspberry Pi, old PC, or VM).
+Run the app: npm install && npm start (listens on localhost:3000 by default).
+Use PM2 for process management: Install globally (npm i -g pm2), then pm2 start server/index.js --name vessel-app and pm2 startup for boot persistence.
+Install Cloudflare Tunnel: Download cloudflared from Cloudflare dashboard, authenticate with cloudflared login.
+Create tunnel: cloudflared tunnel create vessel-tunnel.
+Configure tunnel: Edit ~/.cloudflared/config.yml with:
+texttunnel: vessel-tunnel
+credentials-file: /home/user/.cloudflared/vessel-tunnel.json
+ingress:
+  - hostname: yourdomain.com
+    service: http://localhost:3000
+  - service: http_status:404
+
+Run tunnel: cloudflared tunnel run vessel-tunnel.
+Set up DNS: In Cloudflare dashboard, add CNAME record for yourdomain.com pointing to the tunnel UUID.cfargotunnel.com.
+SSL: Cloudflare handles HTTPS automatically (enable "Always Use HTTPS" in dashboard).
+Firewall: No need to open ports; Tunnel handles ingress securely.
+
+
+Considerations:
+
+Reliability: Monitor uptime with tools like Uptime Kuma; home internet/power outages may cause downtime.
+Scaling: Limited to home hardware; for more users, consider migrating to cloud later.
+Database: SQLite file at DATABASE_PATH; back up daily via cron (e.g., cp vessels.db backup/$(date +%Y-%m-%d).db).
+External Services: Ensure home lab has outbound internet for Twilio/OpenWeatherMap; no inbound ports needed.
+Domain: Register via Cloudflare or use a free subdomain.
+Edge Cases: If tunnel fails, app falls back to local access; test with cloudflared access for auth.
+
+
+
+
+Alternative Options: AWS EC2, DigitalOcean, or Railway for cloud hosting if home lab proves unreliable.
+General:
+
+Backups: Daily SQLite backups via cron.
+Monitoring: Use PM2 logs and Cloudflare analytics.
+Credits: Twilio for SMS, OpenWeatherMap subscription.
