@@ -352,8 +352,13 @@ class Dashboard {
         const ctx = canvas.getContext('2d');
         const colors = ChartUtils.getDefaultColors();
         
+        // Debug logging to see what data we're working with
+        console.log('=== COST IMPACT CHART DEBUG ===');
+        console.log('SpeedCurve data:', speedCurve);
+        
         // Check if we have speed curve data
         if (!speedCurve || speedCurve.length === 0) {
+            console.log('No speed curve data available');
             // No data available - show placeholder chart
             const data = {
                 labels: ['No Data'],
@@ -395,6 +400,12 @@ class Dashboard {
             return;
         }
         
+        // Debug: Check each data point
+        console.log('Data points breakdown:');
+        speedCurve.forEach((point, index) => {
+            console.log(`Point ${index}: Speed=${point.speed} kn, Current=${point.fuelRate} L/hr, Extra=${point.extraFuel} L/hr, Clean=${point.fuelRate - point.extraFuel} L/hr`);
+        });
+        
         const data = {
             labels: speedCurve.map(s => `${s.speed} kn`),
             datasets: [
@@ -417,6 +428,11 @@ class Dashboard {
                 }
             ]
         };
+        
+        console.log('Chart datasets:', data.datasets);
+        console.log('Current fuel rates:', data.datasets[0].data);
+        console.log('Clean hull rates:', data.datasets[1].data);
+        console.log('=== END DEBUG ===');
         
         this.charts.costImpact = new Chart(ctx, {
             type: 'line',

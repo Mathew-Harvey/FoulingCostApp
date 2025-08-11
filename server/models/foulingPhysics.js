@@ -280,17 +280,36 @@ class FoulingPhysics {
     calculateResistanceComponents(speed, frLevel = 0) {
         const speedMs = speed * this.KNOTS_TO_MPS;
         const Re = this.calculateReynolds(speedMs, this.length);
-        const roughness = this.frKsMapping[frLevel] || 0;
         
-        // Calculate friction resistance
-        const cf = this.calculateCf(Re, roughness, this.length);
-        const frictionResistance = 0.5 * this.RHO_WATER * this.wettedSurface * cf * speedMs * speedMs;
+        // Calculate base friction resistance (clean hull)
+        const cfSmooth = this.calculateCf(Re, 0, this.length);
+        const frictionResistanceSmooth = 0.5 * this.RHO_WATER * this.wettedSurface * cfSmooth * speedMs * speedMs;
         
         // Calculate wave resistance
         const waveResistance = this.calculateWaveResistance(speedMs);
         
         // Calculate form factor
         const K = this.calculateFormFactor();
+        
+        // Apply fouling impact using the same model as calculateCostAt
+        let foulingIncrease = 0;
+        if (frLevel > 0) {
+            // Speed-dependent reduction factor (same as calculateCostAt)
+            const Fr = speedMs / Math.sqrt(this.GRAVITY * this.length);
+            let speedReduction = 1.0;
+            if (Fr > 0.15) {
+                // Linear reduction from Fr 0.15 to 0.35
+                speedReduction = Math.max(0.3, 1.0 - 2.0 * (Fr - 0.15));
+            }
+            
+            // Same fouling increases as calculateCostAt
+            const foulingIncreases = [0, 0.15, 0.35, 0.60, 0.95, 1.93];
+            const baseFoulingIncrease = foulingIncreases[frLevel] || 0;
+            foulingIncrease = baseFoulingIncrease * speedReduction;
+        }
+        
+        // Apply fouling to friction resistance
+        const frictionResistance = frictionResistanceSmooth * (1 + foulingIncrease);
         
         // Total resistance
         const totalResistance = frictionResistance * (1 + K) + waveResistance;
@@ -301,7 +320,8 @@ class FoulingPhysics {
             form: K,
             total: totalResistance,
             reynolds: Re,
-            froude: speedMs / Math.sqrt(this.GRAVITY * this.length)
+            froude: speedMs / Math.sqrt(this.GRAVITY * this.length),
+            foulingIncrease: foulingIncrease
         };
     }
     

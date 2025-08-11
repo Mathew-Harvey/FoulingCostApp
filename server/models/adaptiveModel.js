@@ -356,13 +356,19 @@ class AdaptiveFoulingModel {
             const fuelData = this.physics.estimateFuelRate(speed, this.estimateFRLevel());
             const cleanFuelData = this.physics.estimateFuelRate(speed, 0);
             
+            // Convert from kg/hr to L/hr using fuel density (0.85 kg/L)
+            const fuelDensity = 0.85; // kg/L
+            const fuelRateLhr = fuelData.fuelRate / fuelDensity;
+            const cleanFuelRateLhr = cleanFuelData.fuelRate / fuelDensity;
+            const extraFuelLhr = fuelRateLhr - cleanFuelRateLhr;
+            
             curve.push({
                 speed: Math.round(speed * 10) / 10,
-                fuelRate: Math.round(fuelData.fuelRate * 100) / 100, // Convert to L/hr
+                fuelRate: Math.round(fuelRateLhr * 100) / 100, // Now in L/hr
                 cost: Math.round(fuelData.cost * 100) / 100,
                 frLevel: this.estimateFRLevel(),
                 confidence: Math.round(this.confidence),
-                extraFuel: Math.round((fuelData.fuelRate - cleanFuelData.fuelRate) * 100) / 100
+                extraFuel: Math.round(extraFuelLhr * 100) / 100 // Now in L/hr
             });
         }
         
